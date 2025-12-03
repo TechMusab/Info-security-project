@@ -27,9 +27,16 @@ function Dashboard() {
         params: { q: searchQuery }
       });
       // Filter out current user
-      setUsers(response.data.filter(u => u._id !== user.id));
+      const filteredUsers = response.data.filter(u => u._id !== user.id && u._id !== user._id);
+      setUsers(filteredUsers);
     } catch (error) {
       console.error('User search error:', error);
+      setUsers([]);
+      if (error.response?.status === 401) {
+        alert('Session expired. Please login again.');
+        logout();
+        navigate('/login');
+      }
     } finally {
       setLoading(false);
     }
