@@ -79,16 +79,28 @@ function Chat() {
     try {
       const response = await axios.get(`${API_URL}/key-exchange/pending`);
       const pending = response.data.find(
-        ex => (ex.initiatorId._id === userId || ex.responderId._id === userId) &&
-              (ex.initiatorId._id === user.id || ex.responderId._id === user.id)
+        ex => {
+          const initiatorId = ex.initiatorId._id || ex.initiatorId;
+          const responderId = ex.responderId._id || ex.responderId;
+          const currentUserId = user.id || user._id;
+          return (initiatorId === userId || responderId === userId) &&
+                 (initiatorId === currentUserId || responderId === currentUserId);
+        }
       );
 
       if (pending) {
         if (pending.status === 'pending') {
           setKeyExchangeStatus('pending');
-          // If we're the responder, complete the exchange
-          if (pending.responderId._id === user.id && !pending.responderPublicKey) {
+          const responderId = pending.responderId._id || pending.responderId;
+          const currentUserId = user.id || user._id;
+          
+          // If we're the responder and haven't responded yet, complete the exchange
+          if (responderId === currentUserId && !pending.responderPublicKey) {
             await completeKeyExchange(pending);
+          } 
+          // If we're the initiator and responder has responded, establish session
+          else if (responderId !== currentUserId && pending.responderPublicKey) {
+            await establishSessionKey(pending);
           }
         } else if (pending.status === 'completed') {
           await establishSessionKey(pending);
@@ -99,6 +111,10 @@ function Chat() {
       }
     } catch (error) {
       console.error('Check key exchange error:', error);
+      // If no pending exchanges found, start a new one
+      if (error.response?.status === 404 || !error.response) {
+        await startKeyExchange();
+      }
     }
   };
 
@@ -108,6 +124,10 @@ function Chat() {
       setError('');
 
       const privateKeyData = await getPrivateKey(user.username);
+      if (!privateKeyData || !privateKeyData.privateKey) {
+        throw new Error('Private key not found. Please register again.');
+      }
+
       const keyExchangeData = await initiateKeyExchange(
         userId,
         privateKeyData.privateKey,
@@ -122,9 +142,21 @@ function Chat() {
 
       setKeyExchangeStatus('pending');
       // Store key exchange data for later (including ECDH key pair)
-      // Store the exported private key (base64 string), not the CryptoKey object
-      const ecdhPrivateKey = await window.crypto.subtle.exportKey('pkcs8', keyExchangeData.ecdhKeyPair.privateKey);
-      const ecdhPrivateKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(ecdhPrivateKey)));
+      // The ecdhKeyPair contains a CryptoKeyPair object with .keyPair.privateKey
+      if (!keyExchangeData.ecdhKeyPair || !keyExchangeData.ecdhKeyPair.keyPair || !keyExchangeData.ecdhKeyPair.keyPair.privateKey) {
+        throw new Error('ECDH key pair structure invalid');
+      }
+      
+      // Export the private key to base64 for storage
+      const ecdhPrivateKey = await window.crypto.subtle.exportKey('pkcs8', keyExchangeData.ecdhKeyPair.keyPair.privateKey);
+      
+      // Use proper base64 conversion
+      const ecdhPrivateKeyArray = new Uint8Array(ecdhPrivateKey);
+      let binary = '';
+      for (let i = 0; i < ecdhPrivateKeyArray.byteLength; i++) {
+        binary += String.fromCharCode(ecdhPrivateKeyArray[i]);
+      }
+      const ecdhPrivateKeyBase64 = btoa(binary);
       
       localStorage.setItem(`keyExchange_${userId}`, JSON.stringify({
         ecdhPrivateKey: ecdhPrivateKeyBase64,
@@ -133,7 +165,8 @@ function Chat() {
       }));
     } catch (error) {
       console.error('Key exchange initiation error:', error);
-      setError('Failed to initiate key exchange');
+      const errorMessage = error.response?.data?.error || error.message || 'Unknown error';
+      setError('Failed to initiate key exchange: ' + errorMessage);
       setKeyExchangeStatus('idle');
     }
   };
@@ -153,16 +186,40 @@ function Chat() {
       );
 
       // Store responder's ECDH key pair for later use
+      // The ecdhKeyPair from respondToKeyExchange contains the CryptoKeyPair object
+      // We need to export the private key to base64 for storage
+      if (!responseData.ecdhKeyPair || !responseData.ecdhKeyPair.keyPair || !responseData.ecdhKeyPair.keyPair.privateKey) {
+        throw new Error('ECDH key pair not generated correctly');
+      }
+      
+      // Export the private key to base64
+      const ecdhPrivateKey = await window.crypto.subtle.exportKey('pkcs8', responseData.ecdhKeyPair.keyPair.privateKey);
+      const ecdhPrivateKeyArray = new Uint8Array(ecdhPrivateKey);
+      let binary = '';
+      for (let i = 0; i < ecdhPrivateKeyArray.byteLength; i++) {
+        binary += String.fromCharCode(ecdhPrivateKeyArray[i]);
+      }
+      const ecdhPrivateKeyBase64 = btoa(binary);
+      
       localStorage.setItem(`keyExchange_${userId}`, JSON.stringify({
-        ecdhKeyPair: responseData.ecdhKeyPair,
+        ecdhPrivateKey: ecdhPrivateKeyBase64,
         isInitiator: false
       }));
 
-      await axios.post(`${API_URL}/key-exchange/respond`, {
+      // Validate data before sending
+      if (!keyExchange._id || !responseData.responderPublicKey || !responseData.responderSignature) {
+        throw new Error('Missing required key exchange data');
+      }
+
+      const respondResponse = await axios.post(`${API_URL}/key-exchange/respond`, {
         keyExchangeId: keyExchange._id,
         responderPublicKey: responseData.responderPublicKey,
         responderSignature: responseData.responderSignature
       });
+
+      if (respondResponse.status !== 200) {
+        throw new Error('Failed to send key exchange response');
+      }
 
       // Update key exchange and establish session
       const updated = await axios.get(`${API_URL}/key-exchange/${keyExchange._id}`);
@@ -187,22 +244,22 @@ function Chat() {
       let myECDHPrivateKey, theirECDHPublicKey;
       
       if (isInitiator) {
-        // Initiator uses stored ECDH key pair
-        if (!exchangeData.ecdhKeyPair || !exchangeData.ecdhKeyPair.privateKey) {
-          throw new Error('Initiator ECDH key pair not found');
+        // Initiator uses stored ECDH private key
+        if (!exchangeData.ecdhPrivateKey) {
+          throw new Error('Initiator ECDH private key not found in storage');
         }
-        myECDHPrivateKey = exchangeData.ecdhKeyPair.privateKey;
+        myECDHPrivateKey = exchangeData.ecdhPrivateKey;
         
         if (!keyExchange.responderPublicKey) {
-          throw new Error('Responder public key not available yet');
+          throw new Error('Responder public key not available yet. Wait for key exchange to complete.');
         }
         theirECDHPublicKey = keyExchange.responderPublicKey;
       } else {
-        // Responder uses stored ECDH key pair from completeKeyExchange
-        if (!exchangeData.ecdhKeyPair || !exchangeData.ecdhKeyPair.privateKey) {
-          throw new Error('Responder ECDH key pair not found');
+        // Responder uses stored ECDH private key from completeKeyExchange
+        if (!exchangeData.ecdhPrivateKey) {
+          throw new Error('Responder ECDH private key not found in storage');
         }
-        myECDHPrivateKey = exchangeData.ecdhKeyPair.privateKey;
+        myECDHPrivateKey = exchangeData.ecdhPrivateKey;
         theirECDHPublicKey = keyExchange.initiatorPublicKey;
       }
 

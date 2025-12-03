@@ -144,7 +144,14 @@ export async function importRSAPrivateKey(base64Key) {
  */
 export async function importECCPublicKey(base64Key) {
   try {
-    const keyData = base64ToArrayBuffer(base64Key);
+    // Handle both base64 string and raw format
+    let keyData;
+    if (typeof base64Key === 'string') {
+      keyData = base64ToArrayBuffer(base64Key);
+    } else {
+      keyData = base64Key;
+    }
+    
     return await window.crypto.subtle.importKey(
       'spki',
       keyData,
@@ -157,6 +164,8 @@ export async function importECCPublicKey(base64Key) {
     );
   } catch (error) {
     console.error('ECC public key import error:', error);
+    console.error('Key data type:', typeof base64Key);
+    console.error('Key data length:', base64Key?.length);
     throw error;
   }
 }
