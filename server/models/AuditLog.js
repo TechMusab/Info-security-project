@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-
+// AuditLog Schema for logging security-related events
 const auditLogSchema = new mongoose.Schema({
   eventType: {
     type: String,
@@ -57,3 +57,5 @@ auditLogSchema.index({ severity: 1, timestamp: -1 });
 
 module.exports = mongoose.model('AuditLog', auditLogSchema);
 
+// Example usage:
+// const AuditLog = require('./models/AuditLog');
