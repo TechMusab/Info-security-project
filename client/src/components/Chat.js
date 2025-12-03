@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
+
+// Crypto utilities
+// --- IGNORE ---
 import {
   encryptMessage,
   decryptMessage,
