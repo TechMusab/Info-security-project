@@ -2,7 +2,7 @@ const express = require('express');
 const AuditLog = require('../models/AuditLog');
 const logger = require('../utils/logger');
 const { authenticateToken } = require('../middleware/auth');
-
+// Router for audit log related endpoints
 const router = express.Router();
 
 // All routes require authentication

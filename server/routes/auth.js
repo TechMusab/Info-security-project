@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const logger = require('../utils/logger');
-
+// Router for authentication-related endpoints
 const router = express.Router();
 
 // Register new user
