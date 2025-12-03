@@ -121,10 +121,15 @@ function Chat() {
       });
 
       setKeyExchangeStatus('pending');
-      // Store key exchange data for later
+      // Store key exchange data for later (including ECDH key pair)
+      // Store the exported private key (base64 string), not the CryptoKey object
+      const ecdhPrivateKey = await window.crypto.subtle.exportKey('pkcs8', keyExchangeData.ecdhKeyPair.privateKey);
+      const ecdhPrivateKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(ecdhPrivateKey)));
+      
       localStorage.setItem(`keyExchange_${userId}`, JSON.stringify({
-        ...keyExchangeData,
-        keyExchangeId: response.data.keyExchangeId
+        ecdhPrivateKey: ecdhPrivateKeyBase64,
+        keyExchangeId: response.data.keyExchangeId,
+        isInitiator: true
       }));
     } catch (error) {
       console.error('Key exchange initiation error:', error);
@@ -147,6 +152,12 @@ function Chat() {
         user.username
       );
 
+      // Store responder's ECDH key pair for later use
+      localStorage.setItem(`keyExchange_${userId}`, JSON.stringify({
+        ecdhKeyPair: responseData.ecdhKeyPair,
+        isInitiator: false
+      }));
+
       await axios.post(`${API_URL}/key-exchange/respond`, {
         keyExchangeId: keyExchange._id,
         responderPublicKey: responseData.responderPublicKey,
@@ -158,46 +169,48 @@ function Chat() {
       await establishSessionKey(updated.data);
     } catch (error) {
       console.error('Complete key exchange error:', error);
-      setError('Failed to complete key exchange');
+      setError('Failed to complete key exchange: ' + (error.message || 'Unknown error'));
     }
   };
 
   const establishSessionKey = async (keyExchange) => {
     try {
-      const privateKeyData = await getPrivateKey(user.username);
       const storedData = localStorage.getItem(`keyExchange_${userId}`);
       
       if (!storedData) {
-        throw new Error('Key exchange data not found');
+        throw new Error('Key exchange data not found in localStorage');
       }
 
       const exchangeData = JSON.parse(storedData);
-      const isInitiator = keyExchange.initiatorId._id === user.id;
+      const isInitiator = keyExchange.initiatorId._id === user.id || keyExchange.initiatorId._id === user._id;
 
       let myECDHPrivateKey, theirECDHPublicKey;
       
       if (isInitiator) {
+        // Initiator uses stored ECDH key pair
+        if (!exchangeData.ecdhKeyPair || !exchangeData.ecdhKeyPair.privateKey) {
+          throw new Error('Initiator ECDH key pair not found');
+        }
         myECDHPrivateKey = exchangeData.ecdhKeyPair.privateKey;
+        
+        if (!keyExchange.responderPublicKey) {
+          throw new Error('Responder public key not available yet');
+        }
         theirECDHPublicKey = keyExchange.responderPublicKey;
       } else {
-        // We need to get our ECDH key pair
-        const responseData = await respondToKeyExchange(
-          keyExchange.initiatorPublicKey,
-          keyExchange.initiatorSignature,
-          keyExchange.initiatorId.username,
-          null,
-          privateKeyData.privateKey,
-          user.username
-        );
-        myECDHPrivateKey = responseData.ecdhKeyPair.privateKey;
+        // Responder uses stored ECDH key pair from completeKeyExchange
+        if (!exchangeData.ecdhKeyPair || !exchangeData.ecdhKeyPair.privateKey) {
+          throw new Error('Responder ECDH key pair not found');
+        }
+        myECDHPrivateKey = exchangeData.ecdhKeyPair.privateKey;
         theirECDHPublicKey = keyExchange.initiatorPublicKey;
       }
 
       const sessionKey = await deriveSessionKey(
         myECDHPrivateKey,
         theirECDHPublicKey,
-        keyExchange.initiatorId._id,
-        keyExchange.responderId._id
+        keyExchange.initiatorId._id || keyExchange.initiatorId,
+        keyExchange.responderId._id || keyExchange.responderId
       );
 
       setSessionKey(sessionKey);
@@ -205,7 +218,7 @@ function Chat() {
       setError('');
     } catch (error) {
       console.error('Establish session key error:', error);
-      setError('Failed to establish session key');
+      setError('Failed to establish session key: ' + (error.message || 'Unknown error'));
     }
   };
 
