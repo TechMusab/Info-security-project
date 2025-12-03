@@ -11,6 +11,7 @@ function Dashboard() {
   const [users, setUsers] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
+  const [incomingRequests, setIncomingRequests] = useState([]);
 
   useEffect(() => {
     if (searchQuery.length >= 2) {
@@ -19,6 +20,34 @@ function Dashboard() {
       setUsers([]);
     }
   }, [searchQuery]);
+
+  // Poll for incoming chat/key-exchange requests where current user is responder
+  useEffect(() => {
+    if (!user) return;
+
+    const fetchIncoming = async () => {
+      try {
+        const response = await axios.get(`${API_URL}/key-exchange/pending`);
+        const currentUserId = user.id || user._id;
+
+        const pendingForMe = response.data.filter((ex) => {
+          const responderId = ex.responderId._id || ex.responderId;
+          return responderId === currentUserId && ex.status === 'pending';
+        });
+
+        setIncomingRequests(pendingForMe);
+      } catch (error) {
+        console.error('Fetch incoming requests error:', error);
+      }
+    };
+
+    // Initial fetch
+    fetchIncoming();
+    // Poll every 5 seconds
+    const intervalId = setInterval(fetchIncoming, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [user]);
 
   const searchUsers = async () => {
     try {
@@ -132,6 +161,40 @@ function Dashboard() {
           <p style={{ color: '#666', marginTop: '20px' }}>No users found</p>
         )}
       </div>
+
+      {incomingRequests.length > 0 && (
+        <div className="card">
+          <h2>Incoming Chat Requests</h2>
+          <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {incomingRequests.map((req) => (
+              <div
+                key={req._id}
+                style={{
+                  padding: '12px',
+                  border: '1px solid #e0e0e0',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <div>
+                  <strong>{req.initiatorId?.username || 'Unknown user'}</strong>
+                  <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
+                    Chat request pending
+                  </div>
+                </div>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => navigate(`/chat/${req.initiatorId?._id || req.initiatorId}`)}
+                >
+                  Accept
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <h2>Security Information</h2>

@@ -160,7 +160,7 @@ export async function importECCPublicKey(base64Key) {
         namedCurve: 'P-256'
       },
       false,
-      ['deriveKey', 'deriveBits']
+      [] // Public key for ECDH should have no key usages
     );
   } catch (error) {
     console.error('ECC public key import error:', error);
